@@ -16,8 +16,9 @@
 {-# language UnboxedSums #-}
 {-# language UnboxedTuples #-}
 
+-- | Parse token sequences.
 module Data.Parser
-  ( Parser(..)
+  ( Parser
   , Result(..)
   , Slice(..)
   , parseSmallArray
@@ -38,54 +39,18 @@ module Data.Parser
 import Prelude hiding (length,any,fail)
 
 import Data.Bool (bool)
-import Data.Kind (Type)
 import Data.Primitive (SmallArray(..))
-import Data.Bytes.Parser.Types (Result(..),Slice(..))
-import GHC.Exts (TYPE,Int(I#),Int#,State#,SmallArray#)
+import Data.Bytes.Parser (Result(..),Slice(..))
+import Data.Parser.Unsafe (Parser(..))
+import GHC.Exts (TYPE,Int(I#),Int#)
 import GHC.ST (ST(ST),runST)
 
-import qualified Control.Monad
 import qualified Data.Primitive as PM
 import qualified GHC.Exts as Exts
 
-type SmallVector# a = (# SmallArray# a, Int#, Int# #)
-type ST# s (a :: TYPE r) = State# s -> (# State# s, a #)
 type Result# e (a :: TYPE r) =
   (# e
   | (# a, Int#, Int# #) #) -- ints are offset and length
-
-newtype Parser :: Type -> Type -> Type -> Type -> Type where
-  Parser :: { runParser :: SmallVector# a -> ST# s (Result# e b) }
-         -> Parser a e s b
-
-instance Functor (Parser a e s) where
-  {-# inline fmap #-}
-  fmap f (Parser g) = Parser
-    (\x s0 -> case g x s0 of
-      (# s1, r #) -> case r of
-        (# e | #) -> (# s1, (# e | #) #)
-        (# | (# a, b, c #) #) -> (# s1, (# | (# f a, b, c #) #) #)
-    )
-
-instance Applicative (Parser a e s) where
-  pure = pureParser
-  (<*>) = Control.Monad.ap
-
-instance Monad (Parser a e s) where
-  {-# inline return #-}
-  {-# inline (>>=) #-}
-  return = pureParser
-  Parser f >>= g = Parser
-    (\x@(# arr, _, _ #) s0 -> case f x s0 of
-      (# s1, r0 #) -> case r0 of
-        (# e | #) -> (# s1, (# e | #) #)
-        (# | (# y, b, c #) #) ->
-          runParser (g y) (# arr, b, c #) s1
-    )
-
-pureParser :: b -> Parser a e s b
-pureParser a = Parser
-  (\(# _, b, c #) s -> (# s, (# | (# a, b, c #) #) #))
 
 -- | Consumes and returns the next token from the input.
 -- Fails if no tokens are left.
