@@ -62,6 +62,8 @@ any e = uneffectful $ \array off len -> case len of
     let w = PM.indexSmallArray array off
      in Success (Slice (off + 1) (len - 1) w)
 
+-- | Consume a character from the input or return @Nothing@ if
+-- end of the stream has been reached. This parser never fails.
 opt :: Parser a e s (Maybe a)
 {-# inline opt #-}
 opt = uneffectful $ \array off len -> case len of
