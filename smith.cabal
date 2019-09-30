@@ -1,7 +1,7 @@
 cabal-version: 2.2
 name: smith
 version: 0.1.0.0
-synopsis: Parse arrays of boxed types
+synopsis: Parse arrays of tokens
 description:
   This library is similar in spirit to `bytesmith`. While `bytesmith`
   parses byte sequences, `smith` parses token sequences. The most

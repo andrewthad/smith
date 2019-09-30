@@ -39,6 +39,7 @@ type Result# e (a :: TYPE r) =
   (# e
   | (# a, Int#, Int# #) #) -- ints are offset and length
 
+-- | A non-resumable toke parser.
 newtype Parser :: Type -> Type -> Type -> Type -> Type where
   Parser :: { runParser :: SmallVector# a -> ST# s (Result# e b) }
          -> Parser a e s b

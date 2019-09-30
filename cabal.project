@@ -1,9 +1,4 @@
 packages: .
 
-source-repository-package
-  type: git
-  location: https://github.com/andrewthad/bytesmith
-  tag: ab8d90e35d69266698b13eed11280fdf852a9fa0
-
 package smith
   ghc-options: -Wall -Werror
