@@ -30,6 +30,7 @@ module Data.Parser
   , token
   , effect
   , fail
+  , trySatisfy
     -- * Control Flow
   , foldSepBy1
   , sepBy1
@@ -62,7 +63,7 @@ any e = uneffectful $ \array off len -> case len of
     let w = PM.indexSmallArray array off
      in Success (Slice (off + 1) (len - 1) w)
 
--- | Consume a character from the input or return @Nothing@ if
+-- | Consume a token from the input or return @Nothing@ if
 -- end of the stream has been reached. This parser never fails.
 opt :: Parser a e s (Maybe a)
 {-# inline opt #-}
@@ -71,6 +72,19 @@ opt = uneffectful $ \array off len -> case len of
   _ -> 
     let w = PM.indexSmallArray array off
      in Success (Slice (off + 1) (len - 1) (Just w))
+
+-- | Looks at the next token from the input. If the token matches
+-- the predicate, consume the token and return @True@. Otherwise,
+-- do not consume the token and return @False@. If no tokens
+-- remain in the input, return @False@. This parser never fails.
+trySatisfy :: (a -> Bool) -> Parser a e s Bool
+{-# inline trySatisfy #-}
+trySatisfy p = uneffectful $ \array off len -> case len of
+  0 -> Success (Slice off 0 False)
+  _ -> let w = PM.indexSmallArray array off in
+    case p w of
+      True -> Success (Slice (off + 1) (len - 1) True)
+      False -> Success (Slice off len False)
 
 -- | Lift an effect into a parser.
 effect :: ST s b -> Parser a e s b
