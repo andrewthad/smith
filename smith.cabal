@@ -1,6 +1,6 @@
 cabal-version: 2.2
 name: smith
-version: 0.1.0.0
+version: 0.1.1.0
 synopsis: Parse arrays of tokens
 description:
   This library is similar in spirit to `bytesmith`. While `bytesmith`
