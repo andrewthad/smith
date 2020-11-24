@@ -27,17 +27,23 @@ module Data.Parser
   , any
   , opt
   , peek
+  , optPeek
   , token
   , effect
   , fail
   , trySatisfy
     -- * Control Flow
   , foldSepBy1
+  , foldUntil
+  , until
+  , sepBy1_
   , sepBy1
   , skipWhile
+    -- * End of Input
+  , isEndOfInput
   ) where
 
-import Prelude hiding (length,any,fail)
+import Prelude hiding (length,any,fail,until)
 
 import Data.Bool (bool)
 import Data.Primitive (SmallArray(..))
@@ -46,6 +52,7 @@ import Data.Parser.Unsafe (Parser(..))
 import GHC.Exts (TYPE,Int(I#),Int#)
 import GHC.ST (ST(ST),runST)
 
+import qualified Data.Primitive.Contiguous as C
 import qualified Data.Primitive as PM
 import qualified GHC.Exts as Exts
 
@@ -69,7 +76,7 @@ opt :: Parser a e s (Maybe a)
 {-# inline opt #-}
 opt = uneffectful $ \array off len -> case len of
   0 -> Success (Slice off 0 Nothing)
-  _ -> 
+  _ ->
     let w = PM.indexSmallArray array off
      in Success (Slice (off + 1) (len - 1) (Just w))
 
@@ -121,11 +128,21 @@ peek e = uneffectful $ \array off len -> if len > 0
      in Success (Slice off len w)
   else Failure e
 
+-- | Returns the next token from the input without consuming it. Returns
+-- @Nothing@ if at the end of the input.
+optPeek :: Parser a e s (Maybe a)
+{-# inline optPeek #-}
+optPeek = uneffectful $ \array off len -> if len > 0
+  then
+    let w = PM.indexSmallArray array off
+     in Success (Slice off len (Just w))
+  else Success (Slice off len Nothing)
+
 -- | Fold over the tokens, repeatedly running @step@ followed
 -- by @separator@ until @separator@ returns 'False'. This is
 -- strict in the accumulator and always runs @step@ at least
 -- once. There is no backtracking; any failure causes the whole
--- combinator to fail. 
+-- combinator to fail.
 foldSepBy1 ::
      Parser a e s Bool -- ^ Separator
   -> (b -> Parser a e s b) -- ^ Step
@@ -137,6 +154,96 @@ foldSepBy1 sep f b0 = f b0 >>= go
   go !b = sep >>= \case
     True -> f b >>= go
     False -> pure b
+
+-- | Repeatedly run the parser, folding over the results, until a token
+-- that satisfies the predicate is encountered. This is strict in the
+-- accumulator. Tokens the do not match predicate are not consumed.
+-- For example, consider the input sequence:
+--
+-- > Var "a", Var "x1", Var "x2", CloseParen
+--
+-- This could be matched by:
+--
+-- > P.foldUntil
+-- >   (== CloseParen)
+-- >   (\xs -> P.any ErrMsg >>= \case {Var x -> pure (x : xs); _ -> P.fail ErrMsg})
+-- >   []
+--
+-- The accumulated list would be backwards in this example, and the
+-- cursor would be positioned before, not after, @CloseParen@.
+foldUntil ::
+     (a -> Bool) -- ^ When token satisfies predicate, finish without consuming it
+  -> (b -> Parser a e s b) -- ^ Step, consuming and accumulating
+  -> b -- ^ Initial value
+  -> Parser a e s b
+{-# inline foldUntil #-}
+foldUntil isTerminator step !b0 = go b0
+  where
+  go !b = optPeek >>= \case
+    Nothing -> pure b
+    Just t -> if isTerminator t
+      then pure b
+      else do
+        b' <- step b
+        go b'
+
+-- | Variant of 'foldUntil' that collects elements into
+-- an array.
+until :: (C.Contiguous arr, C.Element arr b)
+  => (a -> Bool) -- ^ When token satisfies predicate, finish without consuming it
+  -> Parser a e s b -- ^ Step, producing element for array 
+  -> Parser a e s (arr b)
+{-# inline until #-}
+until isTerminator p = do
+  let cap0 = 8
+  buf0 <- effect (C.new cap0)
+  let go !buf !ix !cap = if ix < cap
+        then optPeek >>= \case
+          Nothing -> effect (C.resize buf ix >>= C.unsafeFreeze)
+          Just t -> if isTerminator t
+            then effect (C.resize buf ix >>= C.unsafeFreeze)
+            else do
+              b <- p
+              effect (C.write buf ix b)
+              go buf (ix + 1) cap
+        else do
+          let cap' = cap * 2
+          buf' <- effect $ do
+            buf' <- C.new cap'
+            C.copyMutable buf' 0 buf 0 cap
+            pure buf'
+          go buf' ix cap'
+  go buf0 0 cap0
+
+-- | Fold over the tokens, repeatedly running @step@ followed
+-- by @separator@ until @separator@ returns 'False'. Collects
+-- all parsed elements into an array (@PrimArray@, @Array@, etc.).
+-- Consider the elements:
+sepBy1 :: (C.Contiguous arr, C.Element arr b)
+  => Parser a e s Bool -- ^ Separator
+  -> Parser a e s b -- ^ Element parser
+  -> Parser a e s (arr b)
+{-# inline sepBy1 #-}
+sepBy1 sep p = do
+  let cap0 = 8
+  buf0 <- effect (C.new cap0)
+  b0 <- p
+  effect (C.write buf0 0 b0)
+  let go !buf !ix !cap = if ix < cap
+        then sep >>= \case
+          True -> do
+            b <- p
+            effect (C.write buf ix b)
+            go buf (ix + 1) cap
+          False -> effect (C.resize buf ix >>= C.unsafeFreeze)
+        else do
+          let cap' = cap * 2
+          buf' <- effect $ do
+            buf' <- C.new cap'
+            C.copyMutable buf' 0 buf 0 cap
+            pure buf'
+          go buf' ix cap'
+  go buf0 1 cap0
 
 -- | Skip tokens for which the predicate is true.
 skipWhile ::
@@ -157,16 +264,28 @@ skipWhile f = go where
 -- always runs @step@ at least once.
 --
 -- > sepBy1 sep step === step *> (sep >>= bool (pure ()) (step *> (sep >>= bool (pure ()) (...))))
-sepBy1 ::
+--
+-- For example, consider this input sequence:
+--
+-- > Var "a", Comma, Var "x1", Comma, Var "x2", CloseParen
+--
+-- This could be matched by:
+--
+-- > P.sepBy1_
+-- >   (P.any ErrMsg >>= \case
+-- >     {Comma -> True; CloseParen -> False; _ -> P.fail ErrMsg}
+-- >   )
+-- >   (P.any ErrMsg >>= \case {Var _ -> pure (); _ -> P.fail ErrMsg})
+sepBy1_ ::
      Parser a e s Bool -- ^ Separator
   -> Parser a e s b -- ^ Step
   -> Parser a e s ()
-{-# inline sepBy1 #-}
-sepBy1 sep f = f *> go where
+{-# inline sepBy1_ #-}
+sepBy1_ sep f = f *> go where
   go = sep >>= \case
     True -> f *> go
     False -> pure ()
-    
+
 uneffectful :: (SmallArray a -> Int -> Int -> Result e b) -> Parser a e s b
 {-# inline uneffectful #-}
 uneffectful f = Parser
@@ -206,3 +325,9 @@ internalUnconsume :: Int -> Parser a e s ()
 internalUnconsume n = uneffectful $ \_ off len ->
   Success (Slice (off - n) (len + n) ())
 
+-- | Returns true if there are no more tokens in the input. Returns false
+-- otherwise. Always succeeds.
+isEndOfInput :: Parser a e s Bool
+isEndOfInput = uneffectful $ \_ off len -> case len of
+  0 -> Success (Slice off 0 True)
+  _ -> Success (Slice off len False)

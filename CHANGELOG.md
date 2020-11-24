@@ -1,5 +1,12 @@
 # Revision history for smith
 
+## 0.2.0.0 -- 2020-??-??
+
+* Make `sepBy1` return an array. Add `sepBy1_` with old behavior
+  that discards elements.
+* Add `isEndOfInput`.
+* Add `foldUntil` and `until`.
+
 ## 0.1.1.0 -- 2020-01-20
 
 * Add `trySatisfy`.
