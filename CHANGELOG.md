@@ -6,6 +6,7 @@
   that discards elements.
 * Add `isEndOfInput`.
 * Add `foldUntil` and `until`.
+* Build with contiguous-0.6.x
 
 ## 0.1.1.0 -- 2020-01-20
 

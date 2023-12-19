@@ -58,9 +58,7 @@ instance Applicative (Parser a e s) where
   (<*>) = Control.Monad.ap
 
 instance Monad (Parser a e s) where
-  {-# inline return #-}
   {-# inline (>>=) #-}
-  return = pureParser
   Parser f >>= g = Parser
     (\x@(# arr, _, _ #) s0 -> case f x s0 of
       (# s1, r0 #) -> case r0 of

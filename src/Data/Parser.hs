@@ -189,7 +189,7 @@ foldUntil isTerminator step !b0 = go b0
 
 -- | Variant of 'foldUntil' that collects elements into
 -- an array.
-until :: (C.Contiguous arr, C.Element arr b)
+until :: (C.ContiguousU arr, C.Element arr b)
   => (a -> Bool) -- ^ When token satisfies predicate, finish without consuming it
   -> Parser a e s b -- ^ Step, producing element for array 
   -> Parser a e s (arr b)
@@ -210,7 +210,7 @@ until isTerminator p = do
           let cap' = cap * 2
           buf' <- effect $ do
             buf' <- C.new cap'
-            C.copyMutable buf' 0 buf 0 cap
+            C.copyMut buf' 0 (C.sliceMut buf 0 cap)
             pure buf'
           go buf' ix cap'
   go buf0 0 cap0
@@ -219,7 +219,7 @@ until isTerminator p = do
 -- by @separator@ until @separator@ returns 'False'. Collects
 -- all parsed elements into an array (@PrimArray@, @Array@, etc.).
 -- Consider the elements:
-sepBy1 :: (C.Contiguous arr, C.Element arr b)
+sepBy1 :: (C.ContiguousU arr, C.Element arr b)
   => Parser a e s Bool -- ^ Separator
   -> Parser a e s b -- ^ Element parser
   -> Parser a e s (arr b)
@@ -240,7 +240,7 @@ sepBy1 sep p = do
           let cap' = cap * 2
           buf' <- effect $ do
             buf' <- C.new cap'
-            C.copyMutable buf' 0 buf 0 cap
+            C.copyMut buf' 0 (C.sliceMut buf 0 cap)
             pure buf'
           go buf' ix cap'
   go buf0 1 cap0
