@@ -7,6 +7,7 @@
 * Add `isEndOfInput`.
 * Add `foldUntil` and `until`.
 * Build with contiguous-0.6.x
+* Add `anySentinel` and `peekSentinel`.
 
 ## 0.1.1.0 -- 2020-01-20
 

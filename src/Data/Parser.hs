@@ -22,18 +22,25 @@ module Data.Parser
   , Result(..)
   , Slice(..)
   , parseSmallArray
+  , parseSmallArrayEither
   , parseSmallArrayEffectfully
     -- * Primitives
   , any
+  , anySentinel
   , opt
   , peek
+  , peekSentinel
   , optPeek
   , token
+  , token2
+  , token4
   , effect
   , fail
   , trySatisfy
     -- * Control Flow
   , foldSepBy1
+  , foldSepByUntilEoi
+  , listSepByUntilEoi
   , foldUntil
   , until
   , sepBy1_
@@ -41,6 +48,9 @@ module Data.Parser
   , skipWhile
     -- * End of Input
   , isEndOfInput
+  , endOfInput
+    -- * Lifting
+  , liftEither
   ) where
 
 import Prelude hiding (length,any,fail,until)
@@ -55,6 +65,7 @@ import GHC.ST (ST(ST),runST)
 import qualified Data.Primitive.Contiguous as C
 import qualified Data.Primitive as PM
 import qualified GHC.Exts as Exts
+import qualified Data.List as List
 
 type Result# e (a :: TYPE r) =
   (# e
@@ -66,6 +77,16 @@ any :: e -> Parser a e s a
 {-# inline any #-}
 any e = uneffectful $ \array off len -> case len of
   0 -> Failure e
+  _ ->
+    let w = PM.indexSmallArray array off
+     in Success (Slice (off + 1) (len - 1) w)
+
+-- | Consumes and returns the next token from the input.
+-- Returns the sentinel token if no tokens are left.
+anySentinel :: a -> Parser a e s a
+{-# inline anySentinel #-}
+anySentinel sentinel = uneffectful $ \array off len -> case len of
+  0 -> Success (Slice off len sentinel)
   _ ->
     let w = PM.indexSmallArray array off
      in Success (Slice (off + 1) (len - 1) w)
@@ -118,6 +139,12 @@ token e a = do
   b <- any e
   bool (fail e) (pure ()) (a == b)
 
+token2 :: Eq a => e -> a -> a -> Parser a e s ()
+token2 e a b = token e a *> token e b
+
+token4 :: Eq a => e -> a -> a -> a -> a -> Parser a e s ()
+token4 e a b c d = token e a *> token e b *> token e c *> token e d
+
 -- | Returns the next token from the input without consuming
 -- it. Fails if no tokens are left.
 peek :: e -> Parser a e s a
@@ -127,6 +154,19 @@ peek e = uneffectful $ \array off len -> if len > 0
     let w = PM.indexSmallArray array off
      in Success (Slice off len w)
   else Failure e
+
+-- | Variant of 'peek' that returns the sentinel token instead of failing
+-- when no tokens are left. It is prudent, but not required, to use
+-- this only on input that does not contain the sentinel token.
+peekSentinel ::
+     a -- ^ Sentinel token
+  -> Parser a e s a
+{-# inline peekSentinel #-}
+peekSentinel sentinel = uneffectful $ \array off len -> if len > 0
+  then
+    let w = PM.indexSmallArray array off
+     in Success (Slice off len w)
+  else Success (Slice off len sentinel)
 
 -- | Returns the next token from the input without consuming it. Returns
 -- @Nothing@ if at the end of the input.
@@ -154,6 +194,35 @@ foldSepBy1 sep f b0 = f b0 >>= go
   go !b = sep >>= \case
     True -> f b >>= go
     False -> pure b
+
+foldSepByUntilEoi ::
+     Parser a e s () -- ^ Separator (cannot check for end-of-input)
+  -> (b -> Parser a e s b) -- ^ Step
+  -> b -- ^ Initial value
+  -> Parser a e s b
+{-# inline foldSepByUntilEoi #-}
+foldSepByUntilEoi sep f b0 = isEndOfInput >>= \case
+  True -> pure b0
+  False -> f b0 >>= go
+  where
+  go !b = isEndOfInput >>= \case
+    True -> pure b
+    False -> do
+      sep
+      f b >>= go
+
+listSepByUntilEoi ::
+     Parser a e s () -- ^ Separator (cannot check for end-of-input)
+  -> Parser a e s b -- ^ Parse single element
+  -> Parser a e s [b]
+{-# inline listSepByUntilEoi #-}
+listSepByUntilEoi sep f = do
+  xs <- foldSepByUntilEoi sep
+    (\ !acc -> do
+      b <- f 
+      pure (b : acc)
+    ) []
+  pure $! List.reverse xs
 
 -- | Repeatedly run the parser, folding over the results, until a token
 -- that satisfies the predicate is encountered. This is strict in the
@@ -308,6 +377,14 @@ parseSmallArray p (SmallArray arr) = runST action
         (# s1, r #) -> (# s1, boxResult r #)
       )
 
+parseSmallArrayEither ::
+     forall a e b. (forall s. Parser a e s b)
+  -> SmallArray a
+  -> Either e b
+parseSmallArrayEither p !xs = case parseSmallArray p xs of
+  Success (Slice _ _ c) -> Right c
+  Failure e -> Left e
+
 parseSmallArrayEffectfully :: Parser a e s b -> SmallArray a -> ST s (Result e b)
 parseSmallArrayEffectfully (Parser f) (SmallArray arr) = ST
   (\s0 -> case f (# arr, 0#, (Exts.sizeofSmallArray# arr) #) s0 of
@@ -325,9 +402,19 @@ internalUnconsume :: Int -> Parser a e s ()
 internalUnconsume n = uneffectful $ \_ off len ->
   Success (Slice (off - n) (len + n) ())
 
+liftEither :: Either e b -> Parser a e s b
+liftEither = \case
+  Left e -> fail e
+  Right b -> pure b
+
 -- | Returns true if there are no more tokens in the input. Returns false
 -- otherwise. Always succeeds.
 isEndOfInput :: Parser a e s Bool
 isEndOfInput = uneffectful $ \_ off len -> case len of
   0 -> Success (Slice off 0 True)
   _ -> Success (Slice off len False)
+
+endOfInput :: e -> Parser a e s ()
+endOfInput e = uneffectful $ \_ off len -> case len of
+  0 -> Success (Slice off 0 ())
+  _ -> Failure e
